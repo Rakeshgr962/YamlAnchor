@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Link2, 
   X, 
@@ -11,6 +11,8 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { cloneRepository } from '@/actions/connection';
+import { useToast } from '@/components/ui/Toast';
 
 // --- Brand Icons ---
 const GithubIcon = () => (
@@ -19,10 +21,58 @@ const GithubIcon = () => (
 
 interface GitHubConnectModalProps {
   onClose: () => void;
-  onConnect: () => void;
+  onConnect: (path?: string) => void;
 }
 
 export default function GitHubConnectModal({ onClose, onConnect }: GitHubConnectModalProps) {
+  const { showToast } = useToast();
+  const [repoUrl, setRepoUrl] = useState("");
+  const [isCloning, setIsCloning] = useState(false);
+
+  // GitHub Auth State
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [githubUser, setGithubUser] = useState("");
+  const [repos, setRepos] = useState<any[]>([]);
+  const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+
+  const fetchRepos = async () => {
+    if (!githubUser) return;
+    setIsLoadingRepos(true);
+    try {
+      const res = await fetch(`https://api.github.com/users/${githubUser}/repos?sort=updated&per_page=5`);
+      if (res.ok) {
+        const data = await res.json();
+        setRepos(data);
+        showToast(`Found ${data.length} repositories`, "success");
+        setIsSigningIn(false);
+      } else {
+        showToast("GitHub user not found or error fetching repos", "error");
+      }
+    } catch (e) {
+      showToast("Network error", "error");
+    } finally {
+      setIsLoadingRepos(false);
+    }
+  };
+
+  const handleConnectAndScan = async () => {
+    if (!repoUrl) {
+      showToast("Please enter a repository URL", "error");
+      return;
+    }
+
+    setIsCloning(true);
+    showToast(`Cloning repository locally...`, "info");
+    const res = await cloneRepository(repoUrl);
+    setIsCloning(false);
+
+    if (res.success && res.path) {
+      showToast(res.message || "Repository cloned successfully", "success");
+      onConnect(res.path);
+    } else {
+      showToast(res.error || "Failed to clone repository", "error");
+    }
+  };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
       <div className="w-full max-w-[700px] bg-[#15151A] border border-gray-800 rounded-xl overflow-hidden shadow-2xl">
@@ -54,28 +104,73 @@ export default function GitHubConnectModal({ onClose, onConnect }: GitHubConnect
                 <input 
                   type="text" 
                   placeholder="https://github.com/username/repo"
+                  value={repoUrl}
+                  onChange={(e) => setRepoUrl(e.target.value)}
                   className="w-full bg-[#0E0E11] border border-gray-800 rounded-md px-4 py-2.5 text-sm text-gray-300 outline-none focus:border-indigo-500/50 transition-colors"
                 />
               </div>
               
               <div className="flex items-center gap-4 py-2">
                 <span className="text-xs text-gray-600 font-bold">OR</span>
-                <button className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-md text-sm text-white font-medium hover:bg-gray-700 transition">
-                  <GithubIcon /> Sign in with GitHub
-                </button>
+                {isSigningIn ? (
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="text" 
+                      placeholder="GitHub Username"
+                      value={githubUser}
+                      onChange={(e) => setGithubUser(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && fetchRepos()}
+                      className="bg-[#0E0E11] border border-gray-800 rounded-md px-3 py-2 text-sm text-gray-300 outline-none focus:border-indigo-500/50"
+                    />
+                    <button 
+                      onClick={fetchRepos}
+                      disabled={isLoadingRepos}
+                      className="px-3 py-2 bg-indigo-500 text-white rounded-md text-sm font-bold hover:bg-indigo-600 transition"
+                    >
+                      {isLoadingRepos ? "..." : "Fetch"}
+                    </button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={() => setIsSigningIn(true)}
+                    className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 border border-gray-700 rounded-md text-sm text-white font-medium hover:bg-gray-700 transition"
+                  >
+                    <GithubIcon /> Sign in with GitHub
+                  </button>
+                )}
               </div>
             </div>
           </section>
 
           {/* Recent Repos */}
           <section className="space-y-4">
-            <div className="text-xs font-bold text-gray-400 uppercase tracking-widest">
-              Recent repos
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                {repos.length > 0 ? `${githubUser}'s Repositories` : "Recent repos"}
+              </div>
             </div>
             
             <div className="grid gap-3">
-              <RepoCard name="user/backend-api" time="Updated 2 hours ago" tags={['Go', 'Docker']} />
-              <RepoCard name="team/frontend-ui" time="Updated 1 day ago" tags={['React', 'TS']} />
+              {repos.length > 0 ? (
+                repos.map((repo: any) => (
+                  <div key={repo.id} onClick={() => setRepoUrl(repo.clone_url)}>
+                    <RepoCard 
+                      name={repo.full_name} 
+                      time={`Updated ${new Date(repo.updated_at).toLocaleDateString()}`} 
+                      tags={[repo.language || 'Unknown']} 
+                    />
+                  </div>
+                ))
+              ) : (
+                <>
+                  <div onClick={() => setRepoUrl("https://github.com/user/backend-api.git")}>
+                    <RepoCard name="user/backend-api" time="Updated 2 hours ago" tags={['Go', 'Docker']} />
+                  </div>
+                  <div onClick={() => setRepoUrl("https://github.com/team/frontend-ui.git")}>
+                    <RepoCard name="team/frontend-ui" time="Updated 1 day ago" tags={['React', 'TS']} />
+                  </div>
+                </>
+              )}
             </div>
           </section>
 
@@ -133,10 +228,11 @@ export default function GitHubConnectModal({ onClose, onConnect }: GitHubConnect
             Cancel
           </button>
           <button 
-            onClick={onConnect}
+            onClick={handleConnectAndScan}
+            disabled={isCloning}
             className="flex items-center gap-2 px-8 py-2 bg-brand-primary text-white font-bold rounded-md hover:bg-brand-primary/90 transition shadow-lg shadow-brand-primary/20"
           >
-            Connect & Scan <ArrowRight size={16} />
+            {isCloning ? "Cloning..." : <>Connect & Scan <ArrowRight size={16} /></>}
           </button>
         </div>
 

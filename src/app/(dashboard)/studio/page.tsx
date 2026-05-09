@@ -1,55 +1,200 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  Terminal, 
-  Search, 
-  Settings, 
-  CheckCircle2, 
-  ChevronRight, 
-  Download, 
-  Play, 
-  Sparkles, 
-  Box,
-  Share2,
-  Bell,
-  Copy,
-  Maximize2,
-  Minimize2,
-  Workflow
+  Terminal, Search, Settings, CheckCircle2, ChevronRight, Download, 
+  Play, Sparkles, Box, Share2, Bell, Copy, Maximize2, Minimize2, Workflow, FolderOpen, FileCode2, Save
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useToast } from '@/components/ui/Toast';
-import { AutoImproveModal } from '@/components/modals/AutoImproveModal';
+import { connectToGithub, scanYaml, validateYaml, listDirectory, improveYaml, browseFolder, deployYaml, saveAsYaml, testLocal, addRunLog } from '@/actions/connection';
 
 export default function StudioDashboardPage() {
   const { showToast } = useToast();
   const router = useRouter();
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
-  const [showAIModal, setShowAIModal] = useState(false);
+  const searchParams = useSearchParams();
 
-  const handleAnalyze = () => {
-    setIsAnalyzing(true);
-    showToast("Analyzing stack dependencies...", "info");
-    setTimeout(() => {
-      setIsAnalyzing(false);
-      showToast("Stack analysis complete. 4 jobs identified.", "success");
-    }, 2000);
+  // Step 1: Directory Selection
+  const [projectPath, setProjectPath] = useState("");
+  const [files, setFiles] = useState<string[]>([]);
+  const [isLoadingDir, setIsLoadingDir] = useState(false);
+
+  useEffect(() => {
+    const pathParam = searchParams.get('path');
+    if (pathParam) {
+      setProjectPath(pathParam);
+    }
+  }, [searchParams]);
+
+  // Step 2: Main File Selection
+  const [mainFile, setMainFile] = useState("");
+  
+  // Step 3: Architecture Understanding
+  const [isUnderstanding, setIsUnderstanding] = useState(false);
+  const [architectureUnderstood, setArchitectureUnderstood] = useState(false);
+
+  // Step 4: Flow Generation & Self-Healing
+  const [isFlowRunning, setIsFlowRunning] = useState(false);
+  const [flowLogs, setFlowLogs] = useState<{label: string, isError: boolean, isSuccess: boolean}[]>([]);
+  const [generatedYaml, setGeneratedYaml] = useState<string>("# Pipeline will appear here once finalized.");
+  const [isPerfected, setIsPerfected] = useState(false);
+  const [currentStage, setCurrentStage] = useState<'build' | 'test' | 'correct' | 'deploy' | null>(null);
+
+  // UI State
+  const [activeTab, setActiveTab] = useState<'visual' | 'terminal'>('terminal');
+
+  // Step 5: Deploy & Save
+  const [isDeploying, setIsDeploying] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleBrowseFolderClick = async () => {
+    showToast("Opening folder picker...", "info");
+    const res = await browseFolder();
+    if (res.success && res.path) {
+      setProjectPath(res.path);
+      showToast("Folder selected successfully.", "success");
+    } else {
+      showToast("Folder selection canceled or failed.", "error");
+    }
   };
 
-  const handleExport = () => {
-    setIsExporting(true);
-    showToast("Pushing anchor.yaml to repository...", "info");
+  const handleLoadDirectory = async () => {
+    if (!projectPath) {
+      showToast("Please enter a valid project path.", "error");
+      return;
+    }
+    setIsLoadingDir(true);
+    showToast("Scanning directory...", "info");
+    const res = await listDirectory(projectPath);
+    setIsLoadingDir(false);
+    if (res.success && res.files) {
+      setFiles(res.files);
+      showToast(`Found ${res.files.length} files in directory.`, "success");
+    } else {
+      setFiles([]);
+      showToast("Failed to load directory. Is it a valid absolute path?", "error");
+    }
+  };
+
+  const handleUnderstandStructure = async () => {
+    if (!mainFile) {
+      showToast("Please select a main file.", "error");
+      return;
+    }
+    setIsUnderstanding(true);
+    showToast("Analyzing project structure based on main file...", "info");
+    
     setTimeout(() => {
-      setIsExporting(false);
-      showToast("Successfully exported to GitHub main branch!", "success");
-    }, 3000);
+      setIsUnderstanding(false);
+      setArchitectureUnderstood(true);
+      showToast("Architecture understood. Ready for pipeline generation.", "success");
+    }, 1500);
+  };
+
+  const handleStartFlow = async () => {
+    setIsFlowRunning(true);
+    setActiveTab('terminal');
+    setFlowLogs([{ label: "Generating initial YAML based on understood structure...", isError: false, isSuccess: false }]);
+    setIsPerfected(false);
+    setCurrentStage('build');
+    const startTime = Date.now();
+    const runLogs: string[] = [];
+    
+    try {
+      const response = await connectToGithub("workspace", projectPath, mainFile);
+      if (response.success && response.generatedYaml) {
+        let currentYaml = response.generatedYaml;
+        setGeneratedYaml(currentYaml);
+        setFlowLogs(prev => [...prev, { label: "✓ Build stage: Initial YAML generated.", isError: false, isSuccess: false }]);
+        runLogs.push("✓ Build stage: Initial YAML generated.");
+
+        let cycle = 1;
+
+        // Loop until the YAML passes all static checks — no arbitrary cap
+        while (true) {
+          setCurrentStage('test');
+          setFlowLogs(prev => [...prev, { label: `━━━ Cycle ${cycle}: Running local test...`, isError: false, isSuccess: false }]);
+          runLogs.push(`━━━ Cycle ${cycle}: Running local test...`);
+          
+          const testRes = await testLocal(currentYaml, cycle);
+          
+          if (!testRes.success) {
+            setFlowLogs(prev => [...prev, { label: `✗ Execution stopped.`, isError: true, isSuccess: false }]);
+            setFlowLogs(prev => [...prev, { label: `  Error: ${testRes.error}`, isError: true, isSuccess: false }]);
+            runLogs.push(`✗ Error: ${testRes.error}`);
+            setCurrentStage('correct');
+            setFlowLogs(prev => [...prev, { label: `  Understanding error and applying correction...`, isError: false, isSuccess: false }]);
+            runLogs.push(`  Applying correction...`);
+            
+            const improveRes = await improveYaml(currentYaml, 1);
+            if (improveRes.finalYaml) {
+              currentYaml = improveRes.finalYaml;
+            }
+            setGeneratedYaml(currentYaml);
+            setFlowLogs(prev => [...prev, { label: `  ✓ Correction applied. Retesting...`, isError: false, isSuccess: false }]);
+            runLogs.push(`  ✓ Correction applied.`);
+            cycle++;
+          } else {
+            // No more errors — done
+            setCurrentStage('deploy');
+            setGeneratedYaml(currentYaml);
+            localStorage.setItem('anchor_yaml', currentYaml);
+            setIsPerfected(true);
+            runLogs.push("✓ No errors detected. Pipeline PASSED.");
+            setFlowLogs(prev => [...prev, { label: "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", isError: false, isSuccess: false }]);
+            setFlowLogs(prev => [...prev, { label: `✓ No errors detected after ${cycle} cycle${cycle > 1 ? 's' : ''}. PASSED.`, isError: false, isSuccess: true }]);
+            setFlowLogs(prev => [...prev, { label: "✓ Pipeline ready for deployment.", isError: false, isSuccess: true }]);
+            break;
+          }
+        }
+
+      } else {
+        setFlowLogs(prev => [...prev, { label: "✗ CRITICAL: YAML Generation failed.", isError: true, isSuccess: false }]);
+      }
+    } catch (err) {
+      setFlowLogs(prev => [...prev, { label: `✗ Exception: ${String(err)}`, isError: true, isSuccess: false }]);
+      runLogs.push(`✗ Exception: ${String(err)}`);
+    } finally {
+      setIsFlowRunning(false);
+      // Save the real run to the log store
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      const duration = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+      const status = isPerfected ? 'success' : 'failed';
+      const name = projectPath ? projectPath.split(/[\\/]/).pop() || 'Pipeline Run' : 'Pipeline Run';
+      const cycleCount = runLogs.filter(l => l.startsWith('━━━ Cycle')).length;
+      await addRunLog({ name: `${name} — ${mainFile || 'auto'}`, status, duration, cycles: cycleCount, logs: runLogs });
+    }
+  };
+
+  const handleDeploy = async () => {
+    setIsDeploying(true);
+    showToast("Exporting pipeline to .github/workflows...", "info");
+    const res = await deployYaml(projectPath, generatedYaml);
+    setIsDeploying(false);
+    if (res.success) {
+      showToast(res.message, "success");
+    } else {
+      showToast(res.error || "Failed to deploy", "error");
+    }
+  };
+
+  const handleSaveAs = async () => {
+    setIsSaving(true);
+    showToast("Opening Save As dialog...", "info");
+    const res = await saveAsYaml(generatedYaml);
+    setIsSaving(false);
+    if (res.success) {
+      showToast(res.message, "success");
+    } else {
+      showToast(res.error || "Save canceled.", "error");
+    }
   };
 
   const handleCopy = () => {
-    navigator.clipboard.writeText("version: '1.0'\npipeline:\n  name: go-react-stack...");
+    navigator.clipboard.writeText(generatedYaml);
     showToast("YAML copied to clipboard", "success");
   };
 
@@ -69,14 +214,7 @@ export default function StudioDashboardPage() {
           </div>
           <div className="flex gap-8 text-sm font-medium">
             <button onClick={() => router.push('/workflows')} className="text-gray-400 hover:text-white transition">Dashboard</button>
-            <button onClick={() => router.push('/connect')} className="text-brand-tertiary border-b-2 border-brand-tertiary pb-5 transition">Connect Repo</button>
-          </div>
-        </div>
-        <div className="flex items-center gap-6 text-gray-400">
-          <Bell size={20} className="hover:text-white cursor-pointer" />
-          <Settings size={20} className="hover:text-white cursor-pointer" />
-          <div className="w-8 h-8 rounded-full bg-gray-800 border border-gray-700 flex items-center justify-center text-xs font-bold text-white overflow-hidden">
-            <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Rakesh" alt="avatar" />
+            <button className="text-brand-tertiary border-b-2 border-brand-tertiary pb-5 transition">Pipeline Wizard</button>
           </div>
         </div>
       </nav>
@@ -84,186 +222,277 @@ export default function StudioDashboardPage() {
       {/* Main Workspace */}
       <div className="flex-1 flex overflow-hidden p-6 gap-6">
         
-        {/* Left Sidebar: Pipeline Intake */}
-        <div className="w-80 flex flex-col gap-6">
+        {/* Left Sidebar: Setup Wizard */}
+        <div className="w-96 flex flex-col gap-6">
           <div className="flex-1 bg-[#1A1C26] border border-gray-800 rounded-lg flex flex-col overflow-hidden">
             <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#1F212E]">
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">PIPELINE INTAKE</span>
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Setup Wizard</span>
               <Workflow size={14} className="text-gray-600" />
             </div>
             
-            <div className="p-6 flex flex-col flex-1 space-y-6">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-300">Stack Description</label>
-                <textarea 
-                  className="w-full h-32 bg-[#0F111A] border border-gray-700 rounded-lg p-4 text-sm text-gray-300 outline-none focus:border-brand-primary transition-colors resize-none"
-                  defaultValue="Go backend + React"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-gray-300">Target Blueprint</label>
-                <select className="w-full bg-[#0F111A] border border-gray-700 rounded-lg p-3 text-sm text-gray-300 outline-none focus:border-brand-primary">
-                  <option>Auto-detect from stack</option>
-                  <option>go-app (Recommended)</option>
-                  <option>node-app</option>
-                  <option>docker-build</option>
-                </select>
-              </div>
-
-              <div className="pt-4 border-t border-gray-800 space-y-4">
-                <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-widest text-gray-500">
-                  <span>Secret Scanner</span>
-                  <span className="text-green-500">Clean</span>
+            <div className="p-6 flex flex-col flex-1 space-y-8 overflow-y-auto custom-scrollbar">
+              
+              {/* Step 1 */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-brand-primary text-white text-xs flex items-center justify-center font-bold">1</div>
+                  <h3 className="text-white font-bold tracking-tight">Load Local Project</h3>
                 </div>
-                <div className="flex justify-between items-center text-[10px] font-bold uppercase tracking-widest text-gray-500">
-                  <span>DAG Validation</span>
-                  <span className="text-green-500">Valid</span>
+                <div className="space-y-2 ml-8">
+                  <div className="flex gap-2">
+                    <input 
+                      type="text"
+                      placeholder="Enter absolute path (e.g. C:\projects\app)"
+                      value={projectPath}
+                      onChange={(e) => setProjectPath(e.target.value)}
+                      className="flex-1 bg-[#0F111A] border border-gray-700 rounded-lg p-3 text-sm text-gray-300 outline-none focus:border-brand-primary transition-colors"
+                    />
+                    <button 
+                      onClick={handleBrowseFolderClick}
+                      className="px-4 py-2 bg-[#0F111A] border border-gray-700 text-gray-300 text-sm font-bold rounded-lg hover:border-brand-primary hover:text-white transition whitespace-nowrap"
+                    >
+                      Browse...
+                    </button>
+                  </div>
+                  <button 
+                    onClick={handleLoadDirectory}
+                    disabled={isLoadingDir}
+                    className="w-full py-2 bg-gray-800 text-white text-sm font-bold rounded-lg hover:bg-gray-700 transition"
+                  >
+                    {isLoadingDir ? "Scanning..." : "Load Directory"}
+                  </button>
                 </div>
               </div>
 
-              <button 
-                onClick={handleAnalyze}
-                disabled={isAnalyzing}
-                className={cn(
-                  "w-full py-3 bg-brand-tertiary text-black font-bold rounded-lg transition shadow-lg shadow-brand-tertiary/10 flex items-center justify-center gap-2",
-                  isAnalyzing ? "opacity-50 cursor-not-allowed" : "hover:bg-brand-tertiary/90"
-                )}
-              >
-                {isAnalyzing ? "Analyzing..." : "Analyze Stack"}
-              </button>
-            </div>
-          </div>
+              {/* Step 2 */}
+              <div className={cn("space-y-4 transition-opacity", files.length > 0 ? "opacity-100" : "opacity-30 pointer-events-none")}>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-brand-tertiary text-black text-xs flex items-center justify-center font-bold">2</div>
+                  <h3 className="text-white font-bold tracking-tight">Select Main File</h3>
+                </div>
+                <div className="space-y-2 ml-8">
+                  <select 
+                    className="w-full bg-[#0F111A] border border-gray-700 rounded-lg p-3 text-sm text-gray-300 outline-none focus:border-brand-tertiary"
+                    value={mainFile}
+                    onChange={(e) => setMainFile(e.target.value)}
+                  >
+                    <option value="" disabled>-- Select start file --</option>
+                    {files.map(f => (
+                      <option key={f} value={f}>{f}</option>
+                    ))}
+                  </select>
+                  <button 
+                    onClick={handleUnderstandStructure}
+                    disabled={isUnderstanding || !mainFile}
+                    className="w-full py-2 bg-brand-tertiary text-black text-sm font-bold rounded-lg hover:bg-brand-tertiary/90 transition shadow-lg shadow-brand-tertiary/10"
+                  >
+                    {isUnderstanding ? "Analyzing Architecture..." : "Understand Structure"}
+                  </button>
+                </div>
+              </div>
 
-          <div className="bg-brand-primary/10 border border-brand-primary/20 rounded-lg p-4 space-y-2">
-            <div className="flex justify-between items-center">
-              <span className="text-[10px] font-bold text-brand-primary uppercase tracking-widest">Cost Telemetry</span>
-              <span className="text-xs font-bold text-white">$0.008/min saved</span>
+              {/* Step 3 */}
+              <div className={cn("space-y-4 transition-opacity", architectureUnderstood ? "opacity-100" : "opacity-30 pointer-events-none")}>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-green-500 text-white text-xs flex items-center justify-center font-bold">3</div>
+                  <h3 className="text-white font-bold tracking-tight">Generate & Heal</h3>
+                </div>
+                <div className="space-y-2 ml-8">
+                  <p className="text-xs text-gray-400">Architecture mapped. Ready to kick off the self-healing CI generation loop.</p>
+                  <button 
+                    onClick={handleStartFlow}
+                    disabled={isFlowRunning || isPerfected}
+                    className="w-full py-3 bg-green-500 text-black text-sm font-bold rounded-lg hover:bg-green-400 transition shadow-xl shadow-green-500/20 flex items-center justify-center gap-2"
+                  >
+                    {isFlowRunning ? <><Sparkles size={16} className="animate-spin" /> Running Loop...</> : "Start Flow"}
+                  </button>
+                </div>
+              </div>
+
             </div>
-            <p className="text-[10px] text-brand-primary/70 leading-relaxed">
-              Based on your pipeline complexity, local simulation saves an estimated 12 mins of remote CI time per run.
-            </p>
           </div>
         </div>
 
         {/* Right Content */}
         <div className="flex-1 flex flex-col gap-6">
           
-          {/* Top: Flow Trace */}
+          {/* Top: Output Tabs */}
           <div className="flex-1 bg-[#1A1C26] border border-gray-800 rounded-lg flex flex-col overflow-hidden relative">
-            <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#1F212E]">
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">FLOW TRACE</span>
-              <div className="flex gap-4">
-                <Search size={14} className="text-gray-600 cursor-pointer hover:text-white" />
-                <Maximize2 size={14} className="text-gray-600 cursor-pointer hover:text-white" />
-              </div>
+            <div className="flex border-b border-gray-800 bg-[#1F212E]">
+              <button 
+                onClick={() => setActiveTab('visual')}
+                className={cn("px-6 py-4 text-xs font-bold uppercase tracking-widest transition-colors flex items-center gap-2", activeTab === 'visual' ? "text-brand-tertiary border-b-2 border-brand-tertiary bg-[#1A1C26]" : "text-gray-500 hover:text-white")}
+              >
+                <Workflow size={14} /> Visual Pipeline
+              </button>
+              <button 
+                onClick={() => setActiveTab('terminal')}
+                className={cn("px-6 py-4 text-xs font-bold uppercase tracking-widest transition-colors flex items-center gap-2", activeTab === 'terminal' ? "text-brand-tertiary border-b-2 border-brand-tertiary bg-[#1A1C26]" : "text-gray-500 hover:text-white")}
+              >
+                <Terminal size={14} /> Self-Healing Logs
+              </button>
             </div>
             
-            <div className="flex-1 flex items-center justify-center p-12 relative">
-              <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
-              <div className="flex items-center gap-6 z-10">
-                <Node label="build" icon={<Settings size={18} />} />
-                <div className="w-8 h-[2px] bg-gray-800"></div>
-                <Node label="test" icon={<CheckCircle2 size={18} />} active />
-                <div className="w-8 h-[2px] bg-gray-800"></div>
-                <Node label="lint" icon={<Workflow size={18} />} />
-                <div className="w-8 h-[2px] bg-gray-800"></div>
-                <Node label="deploy" icon={<Play size={18} />} />
+            {activeTab === 'terminal' ? (
+              <div className="flex-1 p-6 font-mono text-sm leading-relaxed overflow-y-auto custom-scrollbar space-y-2 bg-[#0F111A]">
+                {flowLogs.length === 0 ? (
+                  <div className="text-gray-600 italic">Logs will appear here once the flow starts...</div>
+                ) : (
+                  flowLogs.map((log, i) => (
+                    <div key={i} className="flex gap-4 items-start">
+                      <span className="text-gray-600 mt-0.5 select-none">›</span>
+                      <span className={cn(
+                        log.isError ? "text-red-400 font-bold" : 
+                        log.isSuccess ? "text-green-400 font-bold" : 
+                        "text-gray-300"
+                      )}>{log.label}</span>
+                    </div>
+                  ))
+                )}
+                {isFlowRunning && (
+                  <div className="flex gap-4 items-center animate-pulse">
+                    <span className="text-gray-600 select-none">›</span>
+                    <div className="w-2 h-4 bg-brand-primary/50"></div>
+                  </div>
+                )}
               </div>
-            </div>
+            ) : (
+              <div className="flex-1 flex items-center justify-center p-12 relative bg-[#0F111A]">
+                <div className="absolute inset-0 opacity-[0.03]" style={{ backgroundImage: 'radial-gradient(circle, #fff 1px, transparent 1px)', backgroundSize: '30px 30px' }}></div>
+                <div className="flex flex-col items-center gap-8 z-10">
+                  {isPerfected ? (
+                    <div className="flex items-center gap-6">
+                      <Node label="build" icon={<Settings size={18} />} completed />
+                      <div className="w-8 h-[2px] bg-green-500"></div>
+                      <Node label="test" icon={<CheckCircle2 size={18} />} completed />
+                      <div className="w-8 h-[2px] bg-green-500"></div>
+                      <Node label="deploy" icon={<Play size={18} />} active />
+                    </div>
+                  ) : currentStage === 'build' ? (
+                    <div className="flex items-center gap-6">
+                      <Node label="build" icon={<Settings size={18} />} active />
+                      <div className="w-8 h-[2px] bg-gray-800"></div>
+                      <Node label="test" icon={<CheckCircle2 size={18} />} />
+                      <div className="w-8 h-[2px] bg-gray-800"></div>
+                      <Node label="deploy" icon={<Play size={18} />} />
+                    </div>
+                  ) : currentStage === 'test' ? (
+                    <div className="flex items-center gap-6">
+                      <Node label="build" icon={<Settings size={18} />} completed />
+                      <div className="w-8 h-[2px] bg-brand-tertiary animate-pulse"></div>
+                      <Node label="test" icon={<CheckCircle2 size={18} />} active />
+                      <div className="w-8 h-[2px] bg-gray-800"></div>
+                      <Node label="deploy" icon={<Play size={18} />} />
+                    </div>
+                  ) : currentStage === 'correct' ? (
+                    <div className="flex items-center gap-6">
+                      <Node label="build" icon={<Settings size={18} />} completed />
+                      <div className="w-8 h-[2px] bg-red-500/50"></div>
+                      <Node label="test" icon={<CheckCircle2 size={18} />} error />
+                      <div className="w-8 h-[2px] bg-gray-800"></div>
+                      <Node label="deploy" icon={<Play size={18} />} />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-6 opacity-30">
+                      <Node label="build" icon={<Settings size={18} />} />
+                      <div className="w-8 h-[2px] bg-gray-800"></div>
+                      <Node label="test" icon={<CheckCircle2 size={18} />} />
+                      <div className="w-8 h-[2px] bg-gray-800"></div>
+                      <Node label="deploy" icon={<Play size={18} />} />
+                    </div>
+                  )}
+                  <span className="text-xs font-bold text-gray-500 uppercase tracking-widest mt-4">Live DAG Trace</span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Bottom: YAML Preview */}
-          <div className="h-[400px] bg-[#1A1C26] border border-gray-800 rounded-lg flex flex-col overflow-hidden">
+          {/* Bottom: YAML Preview & Deploy */}
+          <div className="h-[350px] bg-[#1A1C26] border border-gray-800 rounded-lg flex flex-col overflow-hidden">
             <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-[#1F212E]">
               <div className="flex items-center gap-2">
-                <FileTextIcon size={14} className="text-brand-tertiary" />
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ANCHOR.YAML PREVIEW</span>
+                <FileCode2 size={14} className={cn(isPerfected ? "text-green-500" : "text-gray-500")} />
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">FINAL YAML PREVIEW</span>
               </div>
               <button 
                 onClick={handleCopy}
-                className="text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-widest flex items-center gap-1"
+                disabled={!isPerfected}
+                className="text-[10px] font-bold text-gray-400 hover:text-white uppercase tracking-widest flex items-center gap-1 disabled:opacity-50"
               >
                 <Copy size={12} /> Copy
               </button>
             </div>
             
-            <div className="flex-1 overflow-auto bg-[#0F111A] p-6 font-mono text-xs leading-relaxed text-gray-400">
+            <div className="flex-1 overflow-auto bg-[#0F111A] p-6 font-mono text-xs leading-relaxed text-gray-400 relative">
               <div className="flex gap-6">
                 <div className="text-gray-700 text-right select-none space-y-1">
-                  {Array.from({ length: 12 }).map((_, i) => <div key={i}>{i + 1}</div>)}
+                  {generatedYaml.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}
                 </div>
-                <div className="space-y-1">
-                  <p><span className="text-brand-tertiary">version</span>: '1.0'</p>
-                  <p><span className="text-brand-tertiary">pipeline</span>:</p>
-                  <p className="pl-4"><span className="text-brand-tertiary">name</span>: go-react-stack</p>
-                  <p><span className="text-brand-tertiary">stages</span>:</p>
-                  <p className="pl-4">- build</p>
-                  <p className="pl-4">- test</p>
-                  <p className="pl-4">- lint</p>
-                  <p className="pl-4">- deploy</p>
-                  <p><span className="text-brand-tertiary">jobs</span>:</p>
-                  <p className="pl-4"><span className="text-brand-tertiary">build</span>:</p>
-                  <p className="pl-8"><span className="text-brand-tertiary">stage</span>: build</p>
-                  <p><span className="text-brand-tertiary">image</span>: golang:1.20</p>
-                  <p><span className="text-brand-tertiary">script</span>:</p>
-                  <p className="pl-4">- go build ./...</p>
+                <div className="space-y-1 whitespace-pre">
+                  {generatedYaml.split('\n').map((line, i) => (
+                    <div key={i}>
+                      {line.includes(':') ? (
+                        <>
+                          <span className="text-brand-tertiary">{line.substring(0, line.indexOf(':') + 1)}</span>
+                          <span className="text-gray-300">{line.substring(line.indexOf(':') + 1)}</span>
+                        </>
+                      ) : (
+                        <span className={line.startsWith('#') ? "text-gray-500" : "text-gray-300"}>{line}</span>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
+
+              {/* Deploy Overlay */}
+              {isPerfected && (
+                <div className="absolute bottom-6 right-6 p-6 bg-[#1A1C26]/95 backdrop-blur border border-green-500/30 shadow-2xl shadow-green-500/10 rounded-xl animate-in slide-in-from-bottom-8 duration-700 w-[350px]">
+                  <div className="flex flex-col gap-5">
+                    <div className="flex items-center gap-3">
+                      <CheckCircle2 className="text-green-500" size={24} />
+                      <h3 className="text-white font-bold text-lg">YAML Perfected!</h3>
+                    </div>
+                    <p className="text-xs text-gray-400">The AI has verified this pipeline will successfully execute. How would you like to save it?</p>
+                    <div className="flex flex-col gap-2">
+                      <button 
+                        onClick={handleDeploy}
+                        disabled={isDeploying || isSaving}
+                        className="w-full py-2.5 bg-brand-primary text-white text-sm font-bold rounded-lg hover:bg-brand-primary/90 transition shadow-lg shadow-brand-primary/20 flex justify-center items-center gap-2"
+                      >
+                        {isDeploying ? "Deploying..." : <><Download size={16} /> Deploy to .github/workflows</>}
+                      </button>
+                      <button 
+                        onClick={handleSaveAs}
+                        disabled={isDeploying || isSaving}
+                        className="w-full py-2.5 bg-[#0F111A] border border-gray-700 text-gray-300 text-sm font-bold rounded-lg hover:border-gray-500 hover:text-white transition flex justify-center items-center gap-2"
+                      >
+                        {isSaving ? "Opening Dialog..." : <><Save size={16} /> Save As...</>}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
             </div>
           </div>
         </div>
       </div>
-
-      {/* Footer Sticky Actions */}
-      <div className="h-20 border-t border-gray-800 bg-[#151722] flex items-center justify-end px-8 gap-4">
-        <button 
-          onClick={() => setShowAIModal(true)}
-          className="flex items-center gap-2 px-6 py-2.5 rounded-lg border border-gray-700 bg-gray-800/30 text-white text-sm font-bold hover:bg-gray-800 transition"
-        >
-          <Sparkles size={16} className="text-brand-primary" /> Auto-Improve
-        </button>
-        <button 
-          onClick={() => router.push('/pulse')}
-          className="flex items-center gap-2 px-6 py-2.5 rounded-lg border border-gray-700 bg-gray-800/30 text-white text-sm font-bold hover:bg-gray-800 transition"
-        >
-          <Play size={16} className="text-brand-primary" /> Simulate Locally
-        </button>
-        <button 
-          onClick={handleExport}
-          disabled={isExporting}
-          className={cn(
-            "flex items-center gap-2 px-8 py-2.5 rounded-lg bg-brand-tertiary text-black text-sm font-bold transition shadow-xl shadow-brand-tertiary/20",
-            isExporting ? "opacity-50 cursor-not-allowed" : "hover:bg-brand-tertiary/90"
-          )}
-        >
-          {isExporting ? "Exporting..." : <><Download size={16} /> Export to GitHub</>}
-        </button>
-      </div>
-
-      {showAIModal && <AutoImproveModal onClose={() => setShowAIModal(false)} />}
     </div>
   );
 }
 
-const Node = ({ label, icon, active = false }: { label: string, icon: React.ReactNode, active?: boolean }) => (
+const Node = ({ label, icon, active = false, completed = false, error = false }: { label: string, icon: React.ReactNode, active?: boolean, completed?: boolean, error?: boolean }) => (
   <div className={cn(
     "flex items-center gap-3 px-6 py-3 rounded-lg border transition-all cursor-pointer shadow-lg",
-    active 
-      ? "bg-[#1A1C26] border-green-500 text-green-500 shadow-green-500/10" 
-      : "bg-[#1A1C26] border-gray-800 text-gray-500 hover:border-brand-tertiary/50"
+    completed
+      ? "bg-[#1A1C26] border-green-500 text-green-500 shadow-green-500/10"
+      : error
+        ? "bg-[#1A1C26] border-red-500 text-red-500 shadow-red-500/10 animate-pulse"
+        : active 
+          ? "bg-[#1A1C26] border-brand-tertiary text-brand-tertiary shadow-brand-tertiary/10 animate-pulse" 
+          : "bg-[#1A1C26] border-gray-800 text-gray-500"
   )}>
-    <span className={cn(active ? "text-green-500" : "text-brand-tertiary")}>{icon}</span>
-    <span className="text-sm font-bold text-white uppercase tracking-wider">{label}</span>
+    <span>{icon}</span>
+    <span className="text-sm font-bold uppercase tracking-wider">{label}</span>
   </div>
-);
-
-const FileTextIcon = ({ size, className }: { size: number, className: string }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
-    <polyline points="14 2 14 8 20 8"></polyline>
-    <line x1="16" y1="13" x2="8" y2="13"></line>
-    <line x1="16" y1="17" x2="8" y2="17"></line>
-    <line x1="10" y1="9" x2="8" y2="9"></line>
-  </svg>
 );

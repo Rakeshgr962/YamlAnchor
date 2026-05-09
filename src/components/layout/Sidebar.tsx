@@ -5,11 +5,10 @@ import { usePathname, useRouter } from 'next/navigation';
 import { 
   Network, 
   Share2, 
-  Box, 
   ScrollText, 
   BookOpen,
-  Activity,
-  Edit3
+  Edit3,
+  FileCode2
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useToast } from '@/components/ui/Toast';
@@ -50,9 +49,8 @@ export function Sidebar() {
     { icon: <Network size={18} />, label: "Workflows", href: "/workflows" },
     { icon: <Share2 size={18} />, label: "Connectors", href: "/connect" },
     { icon: <Edit3 size={18} />, label: "Studio", href: "/studio" },
-    { icon: <Box size={18} />, label: "Nodes", href: "/nodes" },
+    { icon: <FileCode2 size={18} />, label: "Editor", href: "/editor" },
     { icon: <ScrollText size={18} />, label: "Logs", href: "/logs" },
-    { icon: <Activity size={18} />, label: "Pulse", href: "/pulse" },
     { icon: <BookOpen size={18} />, label: "Docs", href: "/docs" },
   ];
 

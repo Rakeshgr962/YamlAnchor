@@ -4,6 +4,7 @@ import React, { useState } from 'react';
 import { Share2, Copy, ChevronRight } from 'lucide-react';
 import { useToast } from '@/components/ui/Toast';
 import GitHubConnectModal from '@/components/scanning/GitHubConnectModal';
+import GitLabConnectModal from '@/components/scanning/GitLabConnectModal';
 
 // --- Inline SVG brand icons (lucide removed brand icons) ---
 const GithubIcon = ({ size = 32 }: { size?: number }) => (
@@ -27,14 +28,20 @@ const FolderCodeIcon = ({ size = 32 }: { size?: number }) => (
   </svg>
 );
 
+import { useRouter } from 'next/navigation';
+
 export default function ConnectPage() {
   const { showToast } = useToast();
+  const router = useRouter();
   const [showGitHubModal, setShowGitHubModal] = useState(false);
+  const [showGitLabModal, setShowGitLabModal] = useState(false);
   const [isConnecting, setIsConnecting] = useState<string | null>(null);
 
   const handleConnect = (type: string) => {
     if (type === 'github') {
       setShowGitHubModal(true);
+    } else if (type === 'gitlab') {
+      setShowGitLabModal(true);
     } else {
       setIsConnecting(type);
       showToast(`Initializing ${type} connection...`, "info");
@@ -119,12 +126,22 @@ export default function ConnectPage() {
       </div>
 
       {showGitHubModal && (
-        <GitHubConnectModal 
-          onClose={() => setShowGitHubModal(false)} 
-          onConnect={() => {
+        <GitHubConnectModal
+          onClose={() => setShowGitHubModal(false)}
+          onConnect={(path) => {
             setShowGitHubModal(false);
-            showToast("GitHub repository connected successfully!", "success");
-          }} 
+            if (path) router.push(`/studio?path=${encodeURIComponent(path)}`);
+          }}
+        />
+      )}
+
+      {showGitLabModal && (
+        <GitLabConnectModal
+          onClose={() => setShowGitLabModal(false)}
+          onConnect={(path) => {
+            setShowGitLabModal(false);
+            if (path) router.push(`/studio?path=${encodeURIComponent(path)}`);
+          }}
         />
       )}
     </div>
