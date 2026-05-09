@@ -53,10 +53,10 @@ graph TD
     A --- C
     
     subgraph Backend APIs
-        G[/api/analyze]
-        H[/api/test-local]
-        I[/api/improve]
-        J[/api/validate]
+        G["/api/analyze"]
+        H["/api/test-local"]
+        I["/api/improve"]
+        J["/api/validate"]
     end
     B --- G
 ```
